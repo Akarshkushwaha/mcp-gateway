@@ -521,9 +521,13 @@ func dumpClusterStateTo(ctx context.Context, w io.Writer, resources, namespaces 
 // DumpBrokerErrors writes the broker-router pods and their ERROR/WARN log lines
 // since the current spec started to GinkgoWriter. unlike DumpClusterState's temp
 // file, GinkgoWriter output is kept in CI reports for failed specs. lines are
-// prefixed with the pod name so replicas can be told apart.
+// prefixed with the pod name so replicas can be told apart. bounded so a stalled
+// kubectl can't block the failed spec.
 func DumpBrokerErrors(ctx context.Context, namespace string) {
 	const selector = "app.kubernetes.io/name=mcp-gateway,app.kubernetes.io/managed-by=mcp-gateway-controller"
+
+	ctx, cancel := context.WithTimeout(ctx, TestTimeoutShort)
+	defer cancel()
 
 	pods, err := exec.CommandContext(ctx, "kubectl", "get", "pods", "-n", namespace,
 		"-l", selector, "-o", "wide").CombinedOutput()
