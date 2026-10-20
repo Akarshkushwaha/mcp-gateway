@@ -318,7 +318,9 @@ func PatchBrokerCA(ctx context.Context, k8sClient client.Client, namespace strin
 		caSecret := &corev1.Secret{}
 		err := k8sClient.Get(ctx, client.ObjectKey{Name: "private-ca-keypair", Namespace: "cert-manager"}, caSecret)
 		if err == nil {
-			caCertPEM = append(append(caCertPEM, '\n'), caSecret.Data["ca.crt"]...)
+			privateCA, ok := caSecret.Data["ca.crt"]
+			Expect(ok).To(BeTrue(), "private-ca-keypair should have ca.crt")
+			caCertPEM = append(append(caCertPEM, '\n'), privateCA...)
 		} else if !apierrors.IsNotFound(err) {
 			Expect(err).NotTo(HaveOccurred())
 		}
