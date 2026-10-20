@@ -29,6 +29,12 @@ const (
 // was minted is the pair of facts that the upstream rejects unauthenticated
 // calls and the federated whoami description names the bound client_id.
 var _ = Describe("OAuth2 Client Credentials", func() {
+	JustAfterEach(func() {
+		if CurrentSpecReport().Failed() {
+			DumpBrokerErrors(ctx, SystemNamespace)
+		}
+	})
+
 	tokenURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:%d/token",
 		tlsServerName, TestServerNameSpace, tlsServerPort)
 

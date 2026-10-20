@@ -511,3 +511,32 @@ func dumpClusterStateTo(ctx context.Context, w io.Writer, resources, namespaces 
 
 	p("=== END CLUSTER STATE DUMP ===\n")
 }
+
+// DumpBrokerErrors writes the broker-router pods and their ERROR/WARN log lines
+// since the current spec started to GinkgoWriter. unlike DumpClusterState's temp
+// file, GinkgoWriter output is kept in CI reports for failed specs. lines are
+// prefixed with the pod name so replicas can be told apart.
+func DumpBrokerErrors(ctx context.Context, namespace string) {
+	const selector = "app.kubernetes.io/name=mcp-gateway,app.kubernetes.io/managed-by=mcp-gateway-controller"
+
+	pods, err := exec.CommandContext(ctx, "kubectl", "get", "pods", "-n", namespace,
+		"-l", selector, "-o", "wide").CombinedOutput()
+	GinkgoWriter.Printf("=== broker-router pods in %s ===\n%s", namespace, pods)
+	if err != nil {
+		GinkgoWriter.Printf("failed to list broker-router pods: %v\n", err)
+	}
+
+	since := CurrentSpecReport().StartTime.UTC().Format(time.RFC3339)
+	logs, err := exec.CommandContext(ctx, "kubectl", "logs", "-n", namespace, "-l", selector,
+		"--prefix", "--tail=-1", "--since-time="+since).CombinedOutput()
+	if err != nil {
+		GinkgoWriter.Printf("failed to get broker-router logs: %s: %v\n", logs, err)
+		return
+	}
+	GinkgoWriter.Printf("=== broker-router ERROR/WARN logs since %s ===\n", since)
+	for line := range strings.Lines(string(logs)) {
+		if strings.Contains(line, "level=ERROR") || strings.Contains(line, "level=WARN") {
+			GinkgoWriter.Print(line)
+		}
+	}
+}
