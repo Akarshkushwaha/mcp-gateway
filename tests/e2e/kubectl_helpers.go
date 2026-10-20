@@ -312,6 +312,12 @@ func PatchBrokerCA(ctx context.Context, k8sClient client.Client, namespace strin
 		data, ok := cm.Data["ca-bundle.crt"]
 		Expect(ok).To(BeTrue(), "%s should have ca-bundle.crt", GatewayCABundleConfigMap)
 		caCertPEM = []byte(data)
+		// the tls-server fixture (and its oauth2 token endpoint) is signed by the
+		// cert-manager private CA, which KIND trusts above; append it when deployed
+		caSecret := &corev1.Secret{}
+		if err := k8sClient.Get(ctx, client.ObjectKey{Name: "private-ca-keypair", Namespace: "cert-manager"}, caSecret); err == nil {
+			caCertPEM = append(append(caCertPEM, '\n'), caSecret.Data["ca.crt"]...)
+		}
 	}
 
 	secret := &corev1.Secret{
