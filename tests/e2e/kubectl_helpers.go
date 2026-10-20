@@ -18,6 +18,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -315,8 +316,11 @@ func PatchBrokerCA(ctx context.Context, k8sClient client.Client, namespace strin
 		// the tls-server fixture (and its oauth2 token endpoint) is signed by the
 		// cert-manager private CA, which KIND trusts above; append it when deployed
 		caSecret := &corev1.Secret{}
-		if err := k8sClient.Get(ctx, client.ObjectKey{Name: "private-ca-keypair", Namespace: "cert-manager"}, caSecret); err == nil {
+		err := k8sClient.Get(ctx, client.ObjectKey{Name: "private-ca-keypair", Namespace: "cert-manager"}, caSecret)
+		if err == nil {
 			caCertPEM = append(append(caCertPEM, '\n'), caSecret.Data["ca.crt"]...)
+		} else if !apierrors.IsNotFound(err) {
+			Expect(err).NotTo(HaveOccurred())
 		}
 	}
 
@@ -531,9 +535,31 @@ func DumpBrokerErrors(ctx context.Context, namespace string) {
 		"--prefix", "--tail=-1", "--since-time="+since).CombinedOutput()
 	if err != nil {
 		GinkgoWriter.Printf("failed to get broker-router logs: %s: %v\n", logs, err)
+	} else {
+		GinkgoWriter.Printf("=== broker-router ERROR/WARN logs since %s ===\n", since)
+		writeErrorLines(logs)
+	}
+
+	// a restarted container's cause is only in its previous instance. --previous
+	// with -l fails if any pod has none, so fetch per pod and skip those
+	names, err := exec.CommandContext(ctx, "kubectl", "get", "pods", "-n", namespace, "-l", selector,
+		"-o", "name").Output()
+	if err != nil {
 		return
 	}
-	GinkgoWriter.Printf("=== broker-router ERROR/WARN logs since %s ===\n", since)
+	for name := range strings.Lines(string(names)) {
+		name = strings.TrimSpace(name)
+		prev, err := exec.CommandContext(ctx, "kubectl", "logs", "-n", namespace, name,
+			"--previous", "--tail=-1", "--since-time="+since).Output()
+		if err != nil {
+			continue
+		}
+		GinkgoWriter.Printf("=== %s previous container ERROR/WARN logs since %s ===\n", name, since)
+		writeErrorLines(prev)
+	}
+}
+
+func writeErrorLines(logs []byte) {
 	for line := range strings.Lines(string(logs)) {
 		if strings.Contains(line, "level=ERROR") || strings.Contains(line, "level=WARN") {
 			GinkgoWriter.Print(line)
