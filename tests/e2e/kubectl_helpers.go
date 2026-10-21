@@ -525,9 +525,9 @@ func dumpClusterStateTo(ctx context.Context, w io.Writer, resources, namespaces 
 }
 
 // DumpBrokerErrors writes the broker-router pods and their ERROR/WARN log lines
-// containing match since the current spec started to GinkgoWriter. the broker
-// is shared with parallel specs, so match (e.g. a server name) keeps the dump to
-// the failed spec; empty matches all. unlike DumpClusterState's temp file,
+// since the current spec started to GinkgoWriter. the broker is shared with
+// parallel specs, so lines naming another upstream than match (e.g. a server
+// name) are dropped; empty matches all. unlike DumpClusterState's temp file,
 // GinkgoWriter output is kept in CI reports for failed specs. lines are prefixed
 // with the pod name so replicas can be told apart. each kubectl call is bounded
 // so a stalled one can't block the failed spec or starve the calls after it.
@@ -552,7 +552,7 @@ func DumpBrokerErrors(ctx context.Context, namespace, match string) {
 	if err != nil {
 		GinkgoWriter.Printf("failed to get broker-router logs: %s: %v\n", logs, err)
 	} else {
-		GinkgoWriter.Printf("=== broker-router ERROR/WARN logs matching %q since %s ===\n", match, since)
+		GinkgoWriter.Printf("=== broker-router ERROR/WARN logs for %q or no upstream since %s ===\n", match, since)
 		writeErrorLines(logs, match)
 	}
 
@@ -574,11 +574,12 @@ func DumpBrokerErrors(ctx context.Context, namespace, match string) {
 	}
 }
 
-// writeErrorLines writes the ERROR/WARN lines containing match, in either the
-// text or the json (--log-format=json) log format.
+// writeErrorLines writes the ERROR/WARN lines that contain match or name no
+// upstream (request, router and session errors), in either the text or the
+// json (--log-format=json) log format.
 func writeErrorLines(logs []byte, match string) {
 	for line := range strings.Lines(string(logs)) {
-		if !strings.Contains(line, match) {
+		if !strings.Contains(line, match) && strings.Contains(line, "upstream mcp server") {
 			continue
 		}
 		if strings.Contains(line, "level=ERROR") || strings.Contains(line, "level=WARN") ||
