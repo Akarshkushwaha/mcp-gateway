@@ -29,12 +29,6 @@ const (
 // was minted is the pair of facts that the upstream rejects unauthenticated
 // calls and the federated whoami description names the bound client_id.
 var _ = Describe("OAuth2 Client Credentials", func() {
-	JustAfterEach(func() {
-		if CurrentSpecReport().Failed() {
-			DumpBrokerErrors(ctx, SystemNamespace)
-		}
-	})
-
 	tokenURL := fmt.Sprintf("https://%s.%s.svc.cluster.local:%d/token",
 		tlsServerName, TestServerNameSpace, tlsServerPort)
 
@@ -43,7 +37,15 @@ var _ = Describe("OAuth2 Client Credentials", func() {
 			testResources    []client.Object
 			mcpGatewayClient *NotifyingMCPClient
 			registeredServer *mcpv1.MCPServerRegistration
+			serverName       string
 		)
+
+		// empty serverName (setup failed before registering) dumps all errors
+		JustAfterEach(func() {
+			if CurrentSpecReport().Failed() {
+				DumpBrokerErrors(ctx, SystemNamespace, serverName)
+			}
+		})
 
 		BeforeAll(func() {
 			deferCleanupResources(&testResources)
@@ -62,6 +64,7 @@ var _ = Describe("OAuth2 Client Credentials", func() {
 				Build()
 			testResources = append(testResources, registration.GetObjects()...)
 			registeredServer = registration.Register(ctx)
+			serverName = registeredServer.Namespace + "/" + registeredServer.Name
 		})
 
 		It("[Auth] federates tools from an upstream the broker authenticates to with a minted token", func() {
@@ -84,8 +87,6 @@ var _ = Describe("OAuth2 Client Credentials", func() {
 		})
 
 		It("[Auth] exposes no credential material on /status or in the logs", func() {
-			serverName := registeredServer.Namespace + "/" + registeredServer.Name
-
 			By("Verifying /status reports this server as ready")
 			var rawStatus []byte
 			Eventually(func(g Gomega) {
@@ -106,7 +107,7 @@ var _ = Describe("OAuth2 Client Credentials", func() {
 			// token like "access_token" would couple this assertion to whatever
 			// else is writing to the shared broker log under --procs
 			By("Verifying the broker logs carry no secret material")
-			logs, err := GetDeploymentLogs(ctx, SystemNamespace, "mcp-gateway")
+			logs, err := GetBrokerLogs(ctx, SystemNamespace)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(logs).NotTo(ContainSubstring(oauthCCClientSecret))
 		})
@@ -118,7 +119,15 @@ var _ = Describe("OAuth2 Client Credentials", func() {
 			mcpGatewayClient *NotifyingMCPClient
 			registeredServer *mcpv1.MCPServerRegistration
 			creds            *corev1.Secret
+			serverName       string
 		)
+
+		// empty serverName (setup failed before registering) dumps all errors
+		JustAfterEach(func() {
+			if CurrentSpecReport().Failed() {
+				DumpBrokerErrors(ctx, SystemNamespace, serverName)
+			}
+		})
 
 		BeforeAll(func() {
 			deferCleanupResources(&testResources)
@@ -137,11 +146,10 @@ var _ = Describe("OAuth2 Client Credentials", func() {
 				Build()
 			testResources = append(testResources, registration.GetObjects()...)
 			registeredServer = registration.Register(ctx)
+			serverName = registeredServer.Namespace + "/" + registeredServer.Name
 		})
 
 		It("[Auth] federates no tools when the client secret is wrong", func() {
-			serverName := registeredServer.Namespace + "/" + registeredServer.Name
-
 			// the controller resolves the Secret fine; the token request fails
 			// broker-side, so the registration stays Ready as it does for a
 			// bad per-server CA
@@ -169,18 +177,22 @@ var _ = Describe("OAuth2 Client Credentials", func() {
 			// credential, so pin the cause: errorCode is the parsed RFC 6749
 			// field and only this suite exercises the token endpoint. only this
 			// server's token errors are matched, so a failure prints the actual
-			// cause (e.g. x509) rather than a truncated dump of the whole log
+			// cause (e.g. x509) rather than a truncated dump of the whole log.
+			// retried because the broker reads its config from a mounted file and
+			// can still hold a just-replaced CA bundle when this spec starts
 			By("Verifying the AS rejected the credential rather than the connection failing")
-			logs, err := GetDeploymentLogs(ctx, SystemNamespace, "mcp-gateway")
-			Expect(err).NotTo(HaveOccurred())
-			var tokenErrors strings.Builder
-			for line := range strings.Lines(logs) {
-				if strings.Contains(line, "token request failed") && strings.Contains(line, serverName+":") {
-					tokenErrors.WriteString(line)
+			Eventually(func(g Gomega) {
+				logs, err := GetBrokerLogs(ctx, SystemNamespace)
+				g.Expect(err).NotTo(HaveOccurred())
+				var tokenErrors strings.Builder
+				for line := range strings.Lines(logs) {
+					if strings.Contains(line, "token request failed") && strings.Contains(line, serverName+":") {
+						tokenErrors.WriteString(line)
+					}
 				}
-			}
-			Expect(tokenErrors.String()).To(ContainSubstring("invalid_client"),
-				"broker token request errors for %s", serverName)
+				g.Expect(tokenErrors.String()).To(ContainSubstring("invalid_client"),
+					"broker token request errors for %s", serverName)
+			}, TestTimeoutConfigSync, TestRetryInterval).Should(Succeed())
 
 			By("Verifying no tools with the oauth_cc_rot_ prefix appear")
 			WaitForToolsWithPrefixAbsent(ctx, mcpGatewayClient, "oauth_cc_rot_")
